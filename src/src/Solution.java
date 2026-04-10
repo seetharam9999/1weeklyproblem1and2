@@ -1,90 +1,74 @@
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class Solution {
-    // Primary storage for taken usernames (Username -> UserID)
-    private Map<String, Integer> userRegistry;
-    // Counter for tracking how many times a name is searched
-    private Map<String, Integer> popularityMap;
-    // Counter for generating unique IDs for new registrations
-    private int nextId;
+    // Thread-safe map for O(1) stock lookups
+    private ConcurrentHashMap<String, AtomicInteger> inventory = new ConcurrentHashMap<>();
 
-    public Solution() {
-        this.userRegistry = new HashMap<>();
-        this.popularityMap = new HashMap<>();
-        this.nextId = 1;
+    // Maps product IDs to a Queue of User IDs for the waiting list (FIFO)
+    private ConcurrentHashMap<String, ConcurrentLinkedQueue<Integer>> waitingLists = new ConcurrentHashMap<>();
+
+    public Solution() {}
+
+    /**
+     * Initializes stock for a product.
+     */
+    public void addProduct(String productId, int initialStock) {
+        inventory.put(productId, new AtomicInteger(initialStock));
+        waitingLists.put(productId, new ConcurrentLinkedQueue<>());
     }
 
     /**
-     * Checks availability in O(1) time and tracks popularity.
+     * Checks stock in O(1) time.
      */
-    public boolean checkAvailability(String username) {
-        // Increment search frequency
-        popularityMap.put(username, popularityMap.getOrDefault(username, 0) + 1);
-
-        // HashMap containsKey is O(1) average case
-        return !userRegistry.containsKey(username.toLowerCase());
+    public int checkStock(String productId) {
+        AtomicInteger stock = inventory.get(productId);
+        return (stock != null) ? stock.get() : 0;
     }
 
     /**
-     * Generates suggestions by modifying the original string.
+     * Processes purchase with atomic decrement to prevent overselling.
      */
-    public List<String> suggestAlternatives(String username) {
-        List<String> suggestions = new ArrayList<>();
-        int count = 1;
+    public String purchaseItem(String productId, int userId) {
+        AtomicInteger stock = inventory.get(productId);
 
-        // Strategy 1: Append numbers
-        while (suggestions.size() < 2) {
-            String candidate = username + count;
-            if (!userRegistry.containsKey(candidate)) {
-                suggestions.add(candidate);
-            }
-            count++;
+        if (stock == null) return "Product not found";
+
+        // Atomic update: only decrement if value > 0
+        // getAndUpdate ensures thread safety during high concurrency
+        int currentStock = stock.getAndUpdate(s -> (s > 0) ? s - 1 : 0);
+
+        if (currentStock > 0) {
+            return "User " + userId + ": Success, " + (currentStock - 1) + " units remaining";
+        } else {
+            // Stock is 0, add to waiting list (FIFO)
+            ConcurrentLinkedQueue<Integer> list = waitingLists.get(productId);
+            list.add(userId);
+            return "User " + userId + ": Added to waiting list, position #" + list.size();
         }
-
-        // Strategy 2: Add a separator (dot) if not already present
-        if (!username.contains(".")) {
-            String candidate = username.replace("_", ".") + "1";
-            if (!userRegistry.containsKey(candidate)) {
-                suggestions.add(candidate);
-            }
-        }
-
-        return suggestions;
-    }
-
-    /**
-     * Returns the username that has been checked the most.
-     */
-    public String getMostAttempted() {
-        return popularityMap.entrySet()
-                .stream()
-                .max(Map.Entry.comparingByValue())
-                .map(Map.Entry::getKey)
-                .orElse("No attempts yet");
-    }
-
-    // Helper method to simulate a registration
-    public void registerUser(String username) {
-        userRegistry.put(username.toLowerCase(), nextId++);
     }
 
     public static void main(String[] args) {
-        Solution system = new Solution();
+        Solution flashSale = new Solution();
+        String productId = "IPHONE15_256GB";
 
-        // Simulate existing users
-        system.registerUser("john_doe");
-        system.registerUser("admin");
+        // 1. Setup inventory with a small stock for testing
+        flashSale.addProduct(productId, 3);
+        System.out.println("Initial stock: " + flashSale.checkStock(productId));
+        System.out.println("-------------------------------------------");
 
-        // Test Availability
-        System.out.println("john_doe available: " + system.checkAvailability("john_doe")); // false
-        System.out.println("jane_smith available: " + system.checkAvailability("jane_smith")); // true
+        // 2. Simulate 5 users trying to buy (3 will succeed, 2 will waitlist)
+        System.out.println(flashSale.purchaseItem(productId, 101));
+        System.out.println(flashSale.purchaseItem(productId, 102));
+        System.out.println(flashSale.purchaseItem(productId, 103));
 
-        // Test Suggestions
-        System.out.println("Suggestions for john_doe: " + system.suggestAlternatives("john_doe"));
+        // These users should go to the waiting list automatically
+        System.out.println(flashSale.purchaseItem(productId, 104));
+        System.out.println(flashSale.purchaseItem(productId, 105));
 
-        // Test Popularity (multiple checks for 'admin')
-        system.checkAvailability("admin");
-        system.checkAvailability("admin");
-        System.out.println("Most attempted: " + system.getMostAttempted());
+        // 3. Final verification
+        System.out.println("-------------------------------------------");
+        System.out.println("Final stock count: " + flashSale.checkStock(productId));
     }
 }
