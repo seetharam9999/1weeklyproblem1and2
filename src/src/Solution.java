@@ -1,86 +1,76 @@
 import java.util.*;
 
 public class Solution {
-    // Custom Entry to store metadata
-    class DNSEntry {
-        String ipAddress;
-        long expiryTime; // Store as absolute system time in ms
+    // Inverted Index: N-gram Hash -> Set of Document IDs that contain it
+    private Map<Long, Set<String>> ngramIndex = new HashMap<>();
+    // Store total n-gram count per document to calculate similarity %
+    private Map<String, Integer> docTotalNgrams = new HashMap<>();
 
-        DNSEntry(String ipAddress, int ttlSeconds) {
-            this.ipAddress = ipAddress;
-            this.expiryTime = System.currentTimeMillis() + (ttlSeconds * 1000L);
-        }
-
-        boolean isExpired() {
-            return System.currentTimeMillis() > expiryTime;
-        }
-    }
-
-    private final int MAX_CAPACITY = 1000;
-    private long hits = 0;
-    private long misses = 0;
-
-    // LinkedHashMap with accessOrder=true handles LRU automatically
-    private Map<String, DNSEntry> cache = new LinkedHashMap<String, DNSEntry>(MAX_CAPACITY, 0.75f, true) {
-        @Override
-        protected boolean removeEldestEntry(Map.Entry<String, DNSEntry> eldest) {
-            return size() > MAX_CAPACITY;
-        }
-    };
+    private final int N = 5; // Using 5-grams for balance between speed and accuracy
 
     /**
-     * Resolves domain to IP with TTL check and hit/miss tracking.
+     * Indexes a document by breaking it into N-grams and hashing them.
      */
-    public String resolve(String domain) {
-        DNSEntry entry = cache.get(domain);
+    public void indexDocument(String docId, String content) {
+        String[] words = content.toLowerCase().split("\\s+");
+        int count = 0;
 
-        if (entry != null) {
-            if (!entry.isExpired()) {
-                hits++;
-                return entry.ipAddress + " (Cache HIT)";
-            } else {
-                // Remove expired entry
-                cache.remove(domain);
+        for (int i = 0; i <= words.length - N; i++) {
+            long hash = generateNgramHash(words, i, i + N);
+            ngramIndex.computeIfAbsent(hash, k -> new HashSet<>()).add(docId);
+            count++;
+        }
+        docTotalNgrams.put(docId, count);
+    }
+
+    /**
+     * Checks a new document against the database.
+     */
+    public void analyzeDocument(String newDocId, String content) {
+        String[] words = content.toLowerCase().split("\\s+");
+        Map<String, Integer> matchCounts = new HashMap<>();
+        int totalNgrams = 0;
+
+        for (int i = 0; i <= words.length - N; i++) {
+            long hash = generateNgramHash(words, i, i + N);
+            totalNgrams++;
+
+            if (ngramIndex.containsKey(hash)) {
+                for (String matchingDocId : ngramIndex.get(hash)) {
+                    matchCounts.put(matchingDocId, matchCounts.getOrDefault(matchingDocId, 0) + 1);
+                }
             }
         }
 
-        // Simulate Upstream DNS Query (Cache MISS or EXPIRED)
-        misses++;
-        String resolvedIp = queryUpstreamDNS(domain);
-        int ttl = 300; // 5-minute TTL
-        cache.put(domain, new DNSEntry(resolvedIp, ttl));
+        System.out.println("Analysis for: " + newDocId);
+        for (Map.Entry<String, Integer> entry : matchCounts.entrySet()) {
+            String otherDocId = entry.getKey();
+            double similarity = (entry.getValue() * 100.0) / totalNgrams;
 
-        return resolvedIp + " (Upstream Query)";
+            System.out.printf("-> Found %d matches with %s. Similarity: %.1f%%%s\n",
+                    entry.getValue(), otherDocId, similarity,
+                    (similarity > 50 ? " [PLAGIARISM DETECTED]" : similarity > 15 ? " [SUSPICIOUS]" : ""));
+        }
     }
 
-    private String queryUpstreamDNS(String domain) {
-        // Mock IP generation
-        return "172.217." + (int)(Math.random() * 255) + "." + (int)(Math.random() * 255);
+    // A simple polynomial rolling hash for the n-gram
+    private long generateNgramHash(String[] words, int start, int end) {
+        long h = 0;
+        for (int i = start; i < end; i++) {
+            h = 31 * h + words[i].hashCode();
+        }
+        return h;
     }
 
-    public void getCacheStats() {
-        double total = hits + misses;
-        double hitRate = (total == 0) ? 0 : (hits / total) * 100;
-        System.out.println(String.format("Cache Stats - Hits: %d, Misses: %d, Hit Rate: %.2f%%", hits, misses, hitRate));
-    }
+    public static void main(String[] args) {
+        Solution detector = new Solution();
 
-    public static void main(String[] args) throws InterruptedException {
-        Solution dns = new Solution();
+        // Database
+        detector.indexDocument("essay_089.txt", "The quick brown fox jumps over the lazy dog");
+        detector.indexDocument("essay_092.txt", "Data structures are essential for efficient software development and design");
 
-        // First lookup (MISS)
-        System.out.println("google.com -> " + dns.resolve("google.com"));
-
-        // Second lookup (HIT)
-        System.out.println("google.com -> " + dns.resolve("google.com"));
-
-        // Simulate TTL Expiry for a short-lived entry
-        dns.cache.put("fast-expire.com", dns.new DNSEntry("1.1.1.1", 1)); // 1 second TTL
-        System.out.println("fast-expire.com -> " + dns.resolve("fast-expire.com")); // HIT
-
-        Thread.sleep(1100); // Wait for expiration
-
-        System.out.println("fast-expire.com (after 1s) -> " + dns.resolve("fast-expire.com")); // EXPIRED -> MISS
-
-        dns.getCacheStats();
+        // New Submission
+        String submission = "Data structures are vital for efficient software systems and design";
+        detector.analyzeDocument("student_submission.txt", submission);
     }
 }
