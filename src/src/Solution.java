@@ -1,76 +1,70 @@
 import java.util.*;
+import java.util.concurrent.*;
 
 public class Solution {
-    // Inverted Index: N-gram Hash -> Set of Document IDs that contain it
-    private Map<Long, Set<String>> ngramIndex = new HashMap<>();
-    // Store total n-gram count per document to calculate similarity %
-    private Map<String, Integer> docTotalNgrams = new HashMap<>();
-
-    private final int N = 5; // Using 5-grams for balance between speed and accuracy
+    // Dimension 1: Page Views
+    private Map<String, Integer> pageViews = new ConcurrentHashMap<>();
+    // Dimension 2: Unique Visitors (URL -> Set of User IDs)
+    private Map<String, Set<String>> uniqueVisitors = new ConcurrentHashMap<>();
+    // Dimension 3: Traffic Sources
+    private Map<String, Integer> sourceCounts = new ConcurrentHashMap<>();
 
     /**
-     * Indexes a document by breaking it into N-grams and hashing them.
+     * Processes a single page view event in O(1) average time.
      */
-    public void indexDocument(String docId, String content) {
-        String[] words = content.toLowerCase().split("\\s+");
-        int count = 0;
+    public void processEvent(String url, String userId, String source) {
+        // Increment page views
+        pageViews.put(url, pageViews.getOrDefault(url, 0) + 1);
 
-        for (int i = 0; i <= words.length - N; i++) {
-            long hash = generateNgramHash(words, i, i + N);
-            ngramIndex.computeIfAbsent(hash, k -> new HashSet<>()).add(docId);
-            count++;
-        }
-        docTotalNgrams.put(docId, count);
+        // Track unique visitors
+        uniqueVisitors.computeIfAbsent(url, k -> ConcurrentHashMap.newKeySet()).add(userId);
+
+        // Track traffic sources
+        sourceCounts.put(source, sourceCounts.getOrDefault(source, 0) + 1);
     }
 
     /**
-     * Checks a new document against the database.
+     * Extracts the Top N pages using a PriorityQueue in O(P log K)
+     * where P is total pages and K is top N.
      */
-    public void analyzeDocument(String newDocId, String content) {
-        String[] words = content.toLowerCase().split("\\s+");
-        Map<String, Integer> matchCounts = new HashMap<>();
-        int totalNgrams = 0;
+    public List<Map.Entry<String, Integer>> getTopPages(int k) {
+        PriorityQueue<Map.Entry<String, Integer>> minHeap =
+                new PriorityQueue<>(Comparator.comparingInt(Map.Entry::getValue));
 
-        for (int i = 0; i <= words.length - N; i++) {
-            long hash = generateNgramHash(words, i, i + N);
-            totalNgrams++;
-
-            if (ngramIndex.containsKey(hash)) {
-                for (String matchingDocId : ngramIndex.get(hash)) {
-                    matchCounts.put(matchingDocId, matchCounts.getOrDefault(matchingDocId, 0) + 1);
-                }
+        for (Map.Entry<String, Integer> entry : pageViews.entrySet()) {
+            minHeap.offer(entry);
+            if (minHeap.size() > k) {
+                minHeap.poll(); // Remove the smallest
             }
         }
 
-        System.out.println("Analysis for: " + newDocId);
-        for (Map.Entry<String, Integer> entry : matchCounts.entrySet()) {
-            String otherDocId = entry.getKey();
-            double similarity = (entry.getValue() * 100.0) / totalNgrams;
-
-            System.out.printf("-> Found %d matches with %s. Similarity: %.1f%%%s\n",
-                    entry.getValue(), otherDocId, similarity,
-                    (similarity > 50 ? " [PLAGIARISM DETECTED]" : similarity > 15 ? " [SUSPICIOUS]" : ""));
-        }
+        List<Map.Entry<String, Integer>> result = new ArrayList<>(minHeap);
+        Collections.reverse(result);
+        return result;
     }
 
-    // A simple polynomial rolling hash for the n-gram
-    private long generateNgramHash(String[] words, int start, int end) {
-        long h = 0;
-        for (int i = start; i < end; i++) {
-            h = 31 * h + words[i].hashCode();
+    public void getDashboard() {
+        System.out.println("--- REAL-TIME DASHBOARD (Last 5s) ---");
+        System.out.println("Top Pages:");
+        List<Map.Entry<String, Integer>> top = getTopPages(3);
+        for (Map.Entry<String, Integer> e : top) {
+            int unique = uniqueVisitors.get(e.getKey()).size();
+            System.out.println(e.getKey() + " - " + e.getValue() + " views (" + unique + " unique)");
         }
-        return h;
+
+        System.out.println("\nTraffic Sources: " + sourceCounts);
+        System.out.println("-------------------------------------");
     }
 
     public static void main(String[] args) {
-        Solution detector = new Solution();
+        Solution analytics = new Solution();
 
-        // Database
-        detector.indexDocument("essay_089.txt", "The quick brown fox jumps over the lazy dog");
-        detector.indexDocument("essay_092.txt", "Data structures are essential for efficient software development and design");
+        // Simulate traffic
+        analytics.processEvent("/news/breaking", "u1", "google");
+        analytics.processEvent("/news/breaking", "u2", "facebook");
+        analytics.processEvent("/news/breaking", "u1", "google"); // u1 is duplicate
+        analytics.processEvent("/sports/live", "u3", "direct");
 
-        // New Submission
-        String submission = "Data structures are vital for efficient software systems and design";
-        detector.analyzeDocument("student_submission.txt", submission);
+        analytics.getDashboard();
     }
 }
